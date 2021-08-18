@@ -1,7 +1,7 @@
 SRC_DIR := src
 BIN_DIR := bin
 
-EXE := $(BIN_DIR)/aprs
+EXE := $(BIN_DIR)/aprs-sdr
 SRC := $(wildcard $(SRC_DIR)/*.cpp)
 OBJ := $(SRC:$(SRC_DIR)/%.cpp=$(SRC_DIR)/%.o)
 
