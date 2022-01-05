@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <title>HackRF</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.7/css/bootstrap.min.css">
+  <script src="https://code.jquery.com/jquery-2.0.3.min.js"></script>
+  <script src="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.7/js/bootstrap.min.js"></script>
+  <script src="js/hackrf.js"></script>
+  <script src="aprs-sdr.js"></script>
+  <script>
+    "use strict";
+    let h = new HackRF();
+
+    function onTest() {
+        const chunkSize = HackRF.TRANSFER_BUFFER_SIZE;
+        //const chunkSize = 11;
+        let totalPtr = Module._malloc(4);
+        console.log("totalPtr=" + totalPtr.toString(16));
+        let ptr = Module.ccall('gen_iq_s8', 'number', ['number'], [totalPtr]);
+        if (ptr == 0) {
+            throw 'gen_iq_s8 failed';
+        }
+        let total = Module.getValue(totalPtr, 'i32');
+        console.log("total=" + total);
+        Module._free(totalPtr);
+        let offset = 0;
+        while (offset + chunkSize <= total) {
+            let buf = new Int8Array(Module.HEAP8.buffer, ptr+offset, chunkSize);
+            offset += chunkSize;
+            console.log("output buf");
+            //console.log(buf);
+        }
+        Module._free(ptr);
+        //Module.ccall('deinit', null, ['number'], [ptr]);
+    }
+
+    function makeTxCallback() {
+        let totalPtr = Module._malloc(4);
+        console.log("totalPtr=" + totalPtr.toString(16));
+        let ptr = Module.ccall('gen_iq_s8', 'number', ['number'], [totalPtr]);
+        if (ptr == 0) {
+            throw 'gen_iq_s8 failed';
+        }
+        let total = Module.getValue(totalPtr, 'i32');
+        console.log("total=" + total);
+        Module._free(totalPtr);
+        let offset = 0;
+        return function(length) {
+            if (offset + length <= total) {
+                let buf = new Int8Array(Module.HEAP8.buffer, ptr+offset, length);
+                offset += length;
+                return buf;
+            } else {
+                if (ptr != 0) {
+                    Module._free(ptr);
+                    ptr = 0;
+                }
+                return null;
+            }
+        }
+    }
+
+    async function onConnect() {
+        const dev = await HackRF.requestDevice();
+        await h.open(dev);
+        await h.setAmpEnable(false);
+        await h.setAntennaEnable(false);
+        await h.setFreq(144800000);
+        await h.setSampleRateManual(2400000, 1);
+        await h.setVgaGain(30);
+        let txCallback = makeTxCallback();
+        await h.startTx(txCallback);
+    };
+
+    async function onStop() {
+        await h.close();
+        await h.exit();
+    };
+  </script>
+</head>
+<body>
+<div class="container">
+    <a class="btn btn-large btn-success" href="#" onclick="onTest();">Test</a>
+    <a class="btn btn-large btn-success" href="#" onclick="onConnect();">Connect</a>
+    <a class="btn btn-large btn-success" href="#" onclick="onStop();">Stop</a>
+</div>
+</body>
+</html>

@@ -35,24 +35,9 @@ static std::vector<int8_t> f32_to_s8(const std::vector<std::complex<float>> &inp
     return result;
 }
 
-static int save_wave(const std::vector<float> &waveform, const char *output)
-{
-    FILE *fout = stdout;
-    if (output) {
-        fout = fopen(output, "wb");
-        if (fout == NULL) {
-            fprintf(stderr, "Error creating output file '%s'\n", output);
-            return 1;
-        }
-    }
-    fwrite(waveform.data(), sizeof(float), waveform.size(), fout);
-    fclose(fout);
-    return 0;
-}
-
 // FM modulation + interpolation (x50)
 // output sample rate: 48000 * 50 = 2400000
-static int modulate(const std::vector<float> &waveform, const char *output, OutputFormat iq_sf)
+static void modulate(const std::vector<float> &waveform, FILE *fout, OutputFormat iq_sf)
 {
     float max_deviation = 5000; // 5kHz deviation
     float sensitivity = 2 * M_PI * max_deviation / (float)AUDIO_SAMPLE_RATE;
@@ -62,15 +47,6 @@ static int modulate(const std::vector<float> &waveform, const char *output, Outp
     float trans_width = halfband - fractional_bw;
     float mid_transition_band = halfband - trans_width / 2.0;
     std::vector<float> taps = lowpass(factor, factor, mid_transition_band, trans_width);
-
-    FILE *fout = stdout;
-    if (output) {
-        fout = fopen(output, "wb");
-        if (fout == NULL) {
-            fprintf(stderr, "Error creating output file '%s'\n", output);
-            return 1;
-        }
-    }
 
     Ringbuffer_t mod_buf;
     FIRInterpolator interp(factor, taps);
@@ -94,8 +70,32 @@ static int modulate(const std::vector<float> &waveform, const char *output, Outp
         }
         offset += input_size;
     }
-    fclose(fout);
-    return 0;
+}
+
+extern "C" {
+    int8_t* gen_iq_s8(int32_t *total)
+    {
+        const char *callsign = "LZ2RZG";
+        const char *dest = "APRS";
+        char path[64];
+        strcpy(path, "WIDE1-1,WIDE2-1");
+        const char *info = "!4903.50N/02321.47E>";
+
+        auto frame = ax25frame(callsign, dest, path, info, false);
+        auto frame_nrzi = nrzi(frame);
+        auto wave = afsk(frame_nrzi);
+
+        // interpolation factor is 50 and each sample is 2 bytes
+        *total = wave.size() * 50 * 2;
+        int8_t *samples = (int8_t*) malloc(*total);
+        if (!samples) {
+            return 0;
+        }
+        FILE *f = fmemopen(samples, *total, "wb");
+        modulate(wave, f, IQ_S8);
+        fclose(f);
+        return samples;
+    }
 }
 
 int main(int argc, char *argv[])
@@ -156,9 +156,20 @@ int main(int argc, char *argv[])
     auto frame = ax25frame(callsign, dest, path, info, debug);
     auto frame_nrzi = nrzi(frame);
     auto wave = afsk(frame_nrzi);
-    if (iq_sf == PCM_F32) {
-        return save_wave(wave, output);
-    } else {
-        return modulate(wave, output, iq_sf);
+
+    FILE *fout = stdout;
+    if (output) {
+        fout = fopen(output, "wb");
+        if (fout == NULL) {
+            fprintf(stderr, "Error creating output file '%s'\n", output);
+            return 1;
+        }
     }
+    if (iq_sf == PCM_F32) {
+        fwrite(wave.data(), sizeof(float), wave.size(), fout);
+    } else {
+        modulate(wave, fout, iq_sf);
+    }
+    fclose(fout);
+    return 0;
 }
