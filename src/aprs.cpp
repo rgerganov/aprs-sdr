@@ -73,13 +73,11 @@ static void modulate(const std::vector<float> &waveform, FILE *fout, OutputForma
 }
 
 extern "C" {
-    int8_t* gen_iq_s8(int32_t *total)
+    int8_t* gen_iq_s8(const char *callsign, const char *user_path, const char *info, int32_t *total)
     {
-        const char *callsign = "LZ2RZG";
         const char *dest = "APRS";
         char path[64];
-        strcpy(path, "WIDE1-1,WIDE2-1");
-        const char *info = "!4903.50N/02321.47E>";
+        strncpy(path, user_path, 63);
 
         auto frame = ax25frame(callsign, dest, path, info, false);
         auto frame_nrzi = nrzi(frame);

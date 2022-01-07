@@ -320,6 +320,24 @@ class HackRF {
 		}
 	}
 
+	async setTxVgaGain(value) {
+		if (value > 47) {
+			throw "gain must be <= 47";
+		}
+		console.log('setTxVgaGain', {value});
+		const result = await this.device.controlTransferIn({
+			requestType: "vendor",
+			recipient: "device",
+			request: HackRF.HACKRF_VENDOR_REQUEST_SET_TXVGA_GAIN,
+			value: 0,
+			index: value,
+		}, 1);
+		console.log(result);
+		if (result.status !== 'ok' || !result.data.getUint8(0)) {
+			throw 'failed to setVgaGain';
+		}
+	}
+
 	async setLnaGain(value) {
 		if (value > 40) {
 			throw "gain must be <= 40";
@@ -384,6 +402,24 @@ class HackRF {
 		}
 	}
 
+	async txPacket(callback) {
+		await this.setTransceiverMode(HackRF.HACKRF_TRANSCEIVER_MODE_TRANSMIT);
+		while (true) {
+			const data = callback(HackRF.TRANSFER_BUFFER_SIZE);
+			if (!data) {
+				break;
+			}
+			const result = await this.device.transferOut(2, data);
+			if (result) {
+				if (result.status !== 'ok') {
+					throw 'failed to send transfer';
+				}
+			}
+		}
+		await this.setTransceiverMode(HackRF.HACKRF_TRANSCEIVER_MODE_OFF);
+		this.txRunning = [];
+	}
+
 	async startTx(callback) {
 		if (this.txRunning) {
 			throw "already started";
@@ -392,13 +428,22 @@ class HackRF {
 		await this.setTransceiverMode(HackRF.HACKRF_TRANSCEIVER_MODE_TRANSMIT);
 		const transfer = async (resolve) => {
 			const data = callback(HackRF.TRANSFER_BUFFER_SIZE);
+			if (!data) {
+				resolve();
+				const promises = this.txRunning;
+				console.log(promises);
+				this.txRunning = null;
+				await Promise.all(promises);
+				await this.setTransceiverMode(HackRF.HACKRF_TRANSCEIVER_MODE_OFF);
+				await this.exit();
+				return;
+			}
 			const result = await this.device.transferOut(2, data);
 			if (this.txRunning) {
 				transfer(resolve);
 			} else {
 				resolve();
 			}
-			// console.log('transferIn', result);
 			if (result) {
 				if (result.status !== 'ok') {
 					throw 'failed to send transfer';

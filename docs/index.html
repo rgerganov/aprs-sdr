@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <title>APRS tracker</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.7/css/bootstrap.min.css">
+  <script src="https://code.jquery.com/jquery-2.0.3.min.js"></script>
+  <script src="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.7/js/bootstrap.min.js"></script>
+  <script src="js/hackrf.js"></script>
+  <script src="js/aprs-sdr.js"></script>
+  <script>
+    "use strict";
+    let dev = null;
+
+    function makeTxCallback(callsign, path, infoMsg) {
+        let totalPtr = Module._malloc(4);
+        //console.log("totalPtr=" + totalPtr.toString(16));
+        let ptr = Module.ccall('gen_iq_s8', 'number', ['string', 'string', 'string', 'number'], [callsign, path, infoMsg, totalPtr]);
+        if (ptr == 0) {
+            throw 'gen_iq_s8 failed';
+        }
+        let total = Module.getValue(totalPtr, 'i32');
+        console.log("total=" + total);
+        Module._free(totalPtr);
+        let offset = 0;
+        return function(length) {
+            if (offset + length <= total) {
+                let buf = new Int8Array(Module.HEAP8.buffer, ptr+offset, length);
+                console.log("offset: " + offset);
+                offset += length;
+                return buf;
+            } else {
+                if (ptr != 0) {
+                    console.log("Free samples buffer");
+                    Module._free(ptr);
+                    ptr = 0;
+                }
+                return null;
+            }
+        }
+    }
+
+    function getInfoMessage(lat, lon, symbol) {
+        let ns = lat >= 0 ? "N" : "S";
+        let ew = lon >= 0 ? "E" : "W";
+        lat = Math.abs(lat);
+        lon = Math.abs(lon);
+        let lat_deg = Math.trunc(lat).toString().padStart(2, "0");
+        let lat_min = (((lat % 1) * 3600) / 60).toFixed(2).toString().padStart(5, "0");
+        let lon_deg = Math.trunc(lon).toString().padStart(3, "0");
+        let lon_min = (((lon % 1) * 3600) / 60).toFixed(2).toString().padStart(5, "0");
+        return `!${lat_deg}${lat_min}${ns}${symbol[0]}${lon_deg}${lon_min}${ew}${symbol[1]}`
+    }
+
+    function setLocation(loc) {
+        $("#location:text").val(loc.coords.latitude + ", " + loc.coords.longitude);
+    }
+
+    function timeLog(msg) {
+        let d = new Date();
+        let h = d.getHours().toString().padStart(2, "0");
+        let m = d.getMinutes().toString().padStart(2, "0");
+        let s = d.getSeconds().toString().padStart(2, "0");
+        $('#txlog').append(`[${h}:${m}:${s}] ${msg}\n`);
+    }
+
+    async function onTx() {
+        let cs = $('#callsign').val();
+        if (!cs) {
+            // TODO: add more validation for callsign
+            timeLog("Missing callsign");
+            return;
+        }
+        cs = cs.toUpperCase();
+        let path = $('#path').val();
+        if (!path) {
+            timeLog("Missing path");
+            return;
+        }
+        let freq = $('input[name=optfreq]:checked', '#aprs-form').val()
+        let loc = $('#location').val();
+        let latlon = loc.split(",");
+        if (latlon.length != 2) {
+            timeLog("Incorrect location");
+            return;
+        }
+        let lat = latlon[0].trim();
+        if (isNaN(lat) || lat.toString().indexOf('.') == -1) {
+            timeLog("Incorrect latitude");
+            return;
+        }
+        let lon = latlon[1].trim();
+        if (isNaN(lon) || lon.toString().indexOf('.') == -1) {
+            timeLog("Incorrect longitude");
+            return;
+        }
+        let symbol = $('#symbol').val();
+        let aprsSymbol = "/>";
+        if (symbol === "\u{1F697}") {
+            aprsSymbol = "/>"; // car
+        } else if (symbol === "\u{1F3E0}") {
+            aprsSymbol = "/-"; // house
+        } else if (symbol === "\u{2708}") {
+            aprsSymbol = "/^"; // aircraft
+        } else if (symbol === "\u{26F5}") {
+            aprsSymbol = "/s"; // boat
+        }
+        let ampEnabled = $("#amp").prop('checked')
+        let gain = $("#gain").val();
+        console.log(`Callsign: ${cs} Freq: ${freq} Lat: ${lat} Lon: ${lon} Symbol: ${aprsSymbol} Amp: ${ampEnabled} Gain: ${gain}`);
+        let infoMsg = getInfoMessage(lat, lon, aprsSymbol);
+        let h = null;
+        if (!dev) {
+            dev = await HackRF.requestDevice();
+            if (!dev) {
+                timeLog("SDR not found");
+                return;
+            } else {
+                h = new HackRF();
+                await h.open(dev);
+                let devVer = await h.readVersionString();
+                timeLog(`HackRF connected (ver. ${devVer})`);
+                navigator.usb.ondisconnect = event => {
+                    timeLog("HackRF disconnected");
+                    dev = null;
+                };
+            }
+        }
+        if (!h) {
+            h = new HackRF();
+            await h.open(dev);
+        }
+        await h.setAmpEnable(ampEnabled);
+        await h.setAntennaEnable(false);
+        await h.setFreq(freq);
+        await h.setSampleRateManual(2400000, 1);
+        await h.setTxVgaGain(gain);
+        let txCallback = makeTxCallback(cs, path, infoMsg);
+        timeLog(`${cs}>APRS,${path}:${infoMsg}`);
+        await h.startTx(txCallback);
+    }
+
+    $(document).ready(function() {
+        navigator.geolocation.getCurrentPosition(setLocation);
+        $("#refresh").click(function() {
+            navigator.geolocation.getCurrentPosition(setLocation);
+        });
+        $("#btnTx").click(onTx);
+    });
+  </script>
+</head>
+<body>
+<div class="container">
+    <div class="row">
+        <h3>APRS tracker</h3>
+    </div>
+
+    <div id="aprs-form" class="form-horizontal">
+        <div class="form-group">
+          <label class="control-label col-sm-2" for="callsign">Callsign:</label>
+          <div class="col-sm-4">
+              <input type="text" class="form-control" id="callsign" value="" maxlength="9">
+          </div>
+        </div>
+        <div class="form-group">
+            <label class="control-label col-sm-2" for="path">Path:</label>
+            <div class="col-sm-4">
+                <input type="text" class="form-control" id="path" value="WIDE1-1,WIDE2-1" maxlength="60">
+            </div>
+          </div>  
+        <div class="form-group">
+            <label class="control-label col-sm-2">Frequency:</label>
+            <div class="col-sm-4">
+                <div class="radio">
+                    <label><input type="radio" name="optfreq" value="144390000" checked>144.390 MHz</label>
+                </div>
+                <div class="radio">
+                    <label><input type="radio" name="optfreq" value="144575000">144.575 MHz</label>
+                </div>
+                <div class="radio">
+                    <label><input type="radio" name="optfreq" value="144640000">144.640 MHz</label>
+                </div>
+                <div class="radio">
+                    <label><input type="radio" name="optfreq" value="144660000">144.660 MHz</label>
+                </div>
+                <div class="radio">
+                    <label><input type="radio" name="optfreq" value="144800000">144.800 MHz</label>
+                </div>
+            </div>
+        </div>
+        <div class="form-group">
+            <label class="control-label col-sm-2" for="location">Location:</label>
+            <div class="col-sm-4">
+                <div class="input-group">
+                    <input type="text" class="form-control" id="location">
+                    <span class="input-group-addon"><i id="refresh" class="glyphicon glyphicon-refresh"></i></span>
+                </div>
+            </div>
+        </div>
+        <div class="form-group">
+            <label class="control-label col-sm-2" for="symbol">Symbol:</label>
+            <div class="col-sm-1">
+                <select class="form-control" id="symbol">
+                    <option>&#x1F697;</option>
+                    <option>&#x1F3E0;</option>
+                    <option>&#x2708;</option>
+                    <option>&#x26F5;</option>
+                </select>
+            </div>
+        </div>
+        <div class="form-group">
+            <label class="control-label col-sm-2" for="amp">Amplifier:</label>
+            <div class="col-sm-4 checkbox">
+                <label><input type="checkbox" id="amp">Enable</label>
+            </div>
+        </div>
+        <div class="form-group">
+            <label class="control-label col-sm-2" for="gain">TX gain:</label>
+            <div class="col-sm-4">
+                <input type="range" id="gain" style="margin-top: 6px;" min="1" max="47">
+            </div>
+        </div>
+        <div class="form-group">
+            <div class="col-sm-offset-2 col-sm-10">
+              <button type="submit" id="btnTx" class="btn btn-large btn-danger">Transmit</button>
+            </div>
+        </div>
+        <div class="form-group">
+            <label class="control-label col-sm-2" for="txlog">Log:</label>
+            <div class="col-sm-6">
+                <textarea class="form-control" style="font-family: monospace;" rows="8" id="txlog" disabled></textarea>
+            </div>
+        </div>        
+    </div>
+    <div class="footer">v1.0 (<a href="https://github.com/rgerganov/aprs-sdr">source</a>)</div>
+</div>
+</body>
+</html>
