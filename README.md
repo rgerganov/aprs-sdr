@@ -1,5 +1,6 @@
 APRS tracker with transmit capable SDRs
 
+![](/docs/aprs-hackrf.gif)
 ![](/docs/aprs-sdr.png)
 
 * GPS device - Any GPS device supported by `gpsd`. You can also use a mobile phone and stream GPS data using an app like this [one](https://play.google.com/store/apps/details?id=io.github.tiagoshibata.gpsdclient&hl=en&gl=US)
